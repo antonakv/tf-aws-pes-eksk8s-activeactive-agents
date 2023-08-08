@@ -1,0 +1,15 @@
+[Unit]
+Description="Terraform agent"
+Requires=network-online.target
+After=network-online.target
+
+[Service]
+User=ubuntu
+Group=ubuntu
+ExecStart=/usr/local/bin/tfc-agent
+EnvironmentFile=/etc/tfc-agent.env
+Restart=on-failure
+RestartSec=4s
+
+[Install]
+WantedBy=multi-user.target
