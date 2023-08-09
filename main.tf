@@ -13,23 +13,24 @@ locals {
   values-yaml = templatefile(
     "templates/values.yaml.tpl",
     {
-      hostname        = local.tfe_hostname
-      tfe_quaiio_tag  = var.tfe_quaiio_tag
-      enc_password    = random_id.enc_password.hex
-      pg_dbname       = var.postgres_db_name
-      pg_netloc       = aws_db_instance.tfe.endpoint
-      pg_password     = random_string.pgsql_password.result
-      pg_user         = var.postgres_username
-      region          = var.region
-      s3_bucket       = aws_s3_bucket.tfe_data.id
-      install_id      = random_id.install_id.hex
-      user_token      = random_id.user_token.hex
-      redis_pass      = random_id.redis_password.hex
-      redis_host      = aws_elasticache_replication_group.redis.primary_endpoint_address
-      tfe_tls_version = var.tfe_tls_version
-      tls_key_data    = filebase64(var.ssl_key_path)
-      tls_crt_data    = filebase64(var.ssl_fullchain_cert_path)
-      license_data    = filebase64(var.tfe_license_path)
+      hostname          = local.tfe_hostname
+      docker_image_tag  = var.docker_image_tag
+      enc_password      = random_id.enc_password.hex
+      pg_dbname         = var.postgres_db_name
+      pg_netloc         = aws_db_instance.tfe.endpoint
+      pg_password       = random_string.pgsql_password.result
+      pg_user           = var.postgres_username
+      region            = var.region
+      s3_bucket         = aws_s3_bucket.tfe_data.id
+      install_id        = random_id.install_id.hex
+      user_token        = random_id.user_token.hex
+      redis_pass        = random_id.redis_password.hex
+      redis_host        = aws_elasticache_replication_group.redis.primary_endpoint_address
+      tfe_tls_version   = var.tfe_tls_version
+      tls_key_data      = filebase64(var.ssl_key_path)
+      tls_crt_data      = filebase64(var.ssl_fullchain_cert_path)
+      license_data      = filebase64(var.tfe_license_path)
+      docker_repository = var.docker_repository
     }
   )
 }
@@ -538,12 +539,10 @@ resource "aws_s3_bucket_public_access_block" "tfe_data" {
   ignore_public_acls      = true
 }
 
-# Adjust to k8s
-
-/* resource "aws_s3_bucket_policy" "tfe_data" {
+resource "aws_s3_bucket_policy" "tfe_data" {
   bucket = aws_s3_bucket_public_access_block.tfe_data.bucket
   policy = data.aws_iam_policy_document.tfe_data.json
-} */
+}
 
 resource "aws_security_group" "redis_sg" {
   name   = "${local.friendly_name_prefix}-redis-sg"
@@ -735,7 +734,8 @@ provider "helm" {
     }
   }
   experiments {
-    manifest = true
+    # show rendered helm values in the terraform plan
+    manifest = false
   }
 }
 
@@ -808,9 +808,7 @@ provider "helm" {
   ]
 } */
 
-# Adjust for K8S
-
-/* data "aws_iam_policy_document" "tfe_data" {
+data "aws_iam_policy_document" "tfe_data" {
   statement {
     actions = [
       "s3:GetBucketLocation",
@@ -839,9 +837,7 @@ provider "helm" {
     resources = ["${aws_s3_bucket.tfe_data.arn}/*"]
     sid       = "AllowS3ManagementData"
   }
-} */
-
-# Adjust to K8s
+}
 
 /* resource "aws_lb" "tfe_lb" {
   name               = "${local.friendly_name_prefix}-tfe-app-lb"
@@ -933,10 +929,10 @@ resource "kubernetes_namespace" "terraform-enterprise" {
 data "template_file" "docker_config" {
   template = file("templates/docker_registry.json.tpl")
   vars = {
-    docker-username = var.docker_quaiio_login
-    docker-password = var.docker_quaiio_token
-    docker-server   = "quay.io"
-    auth            = base64encode("${var.docker_quaiio_login}:${var.docker_quaiio_token}")
+    docker-username = var.docker_repository_login
+    docker-password = var.docker_repository_token
+    docker-server   = var.docker_repository
+    auth            = base64encode("${var.docker_repository_login}:${var.docker_repository_token}")
   }
 }
 
@@ -950,6 +946,25 @@ resource "kubernetes_secret" "docker_registry" {
   }
   type = "kubernetes.io/dockerconfigjson"
 }
+/* 
+resource "kubernetes_service_account" "assumerole" {
+  metadata {
+    name      = "terraform-enterprise"
+    namespace = kubernetes_namespace.terraform-enterprise.id
+  }
+} */
+
+resource "helm_release" "ingress-nginx" {
+  name             = "ingress-nginx"
+  repository       = "https://kubernetes.github.io/ingress-nginx"
+  chart            = "ingress-nginx"
+  namespace        = "ingress-nginx"
+  cleanup_on_fail  = true
+  replace          = true
+  force_update     = true
+  create_namespace = true
+  version          = "4.7.1"
+}
 
 resource "helm_release" "terraform-enterprise" {
   name            = "terraform-enterprise"
@@ -959,4 +974,10 @@ resource "helm_release" "terraform-enterprise" {
   cleanup_on_fail = true
   replace         = true
   force_update    = true
+  version         = "0.1.2"
+  depends_on      = [helm_release.ingress-nginx]
 }
+
+/* data "aws_eks_cluster" "eks" {
+  name = "${local.friendly_name_prefix}-eks"
+} */
