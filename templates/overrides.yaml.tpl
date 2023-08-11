@@ -11,9 +11,6 @@ image:
   pullSecret: docker-registry
   pullPolicy: Always
 
-pod:
-  annotations: {}
-
 resources:
   requests:
     memory: "2500Mi"
@@ -36,13 +33,21 @@ tfe:
   privateHttpPort: 8080
   privateHttpsPort: 8443 
 
+pod:
+  annotations:
+    k8tz.io/timezone: "Europe/Amsterdam"
+
 nodeSelector: {}
 
 tolerations: []
 
 affinity: {}
 
-securityContext: {}
+securityContext:
+  # runAsNonRoot: false
+  # runAsUser: 1000
+  # runAsGroup: 3000
+  fsGroup: 2000
 
 initContainers: null
 
@@ -51,6 +56,8 @@ ingress:
   className: nginx
   annotations: 
     nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    kubernetes.io/ingress.class: nginx
+    kubernetes.io/tls-acme: "true"
   hosts:
     - host: ${hostname}
       paths:
@@ -69,6 +76,17 @@ service:
   type: LoadBalancer
   port: 443
   nodePort: 32443 # if service.type is NodePort value will be set
+
+rbac:
+  create: true
+
+serviceAccount:
+  create: true
+  annotations: 
+    eks.amazonaws.com/role-arn: "${tfe_s3_role_arn}"
+  name: ""
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
 
 env:
   variables:
@@ -90,7 +108,8 @@ env:
     TFE_REDIS_HOST: ${redis_host}:6380
     TFE_REDIS_USE_AUTH: true
     TFE_REDIS_USE_TLS: true
-  secretes:
+    TZ: Europe/Amsterdam
+  secrets:
     TFE_LICENSE: ${license_data}
     TFE_ENCRYPTION_PASSWORD: ${enc_password}
     TFE_IACT_TOKEN: ${user_token}

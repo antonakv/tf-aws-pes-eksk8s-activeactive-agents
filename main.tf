@@ -1,6 +1,8 @@
 locals {
   friendly_name_prefix = "aakulov-${random_string.friendly_name.id}"
   tfe_hostname         = "${random_string.friendly_name.id}${var.tfe_hostname}"
+  service_account_name = "terraform-enterprise"
+  tfe_k8s_namespace    = "terraform-enterprise"
   tfc_agent_user_data = templatefile(
     "templates/installagent.sh.tpl",
     {
@@ -10,8 +12,8 @@ locals {
       tfe_hostname     = local.tfe_hostname
     }
   )
-  values-yaml = templatefile(
-    "templates/values.yaml.tpl",
+  overrides-yaml = templatefile(
+    "templates/overrides.yaml.tpl",
     {
       hostname          = local.tfe_hostname
       docker_image_tag  = var.docker_image_tag
@@ -31,6 +33,7 @@ locals {
       tls_crt_data      = filebase64(var.ssl_fullchain_cert_path)
       license_data      = filebase64(var.tfe_license_path)
       docker_repository = var.docker_repository
+      tfe_s3_role_arn   = aws_iam_role.tfe_pods_assume_role.arn
     }
   )
 }
@@ -112,7 +115,7 @@ data "aws_iam_policy_document" "secretsmanager" {
   statement {
     actions   = ["secretsmanager:GetSecretValue"]
     effect    = "Allow"
-    resources = [aws_secretsmanager_secret_version.tfe_license.secret_id, aws_secretsmanager_secret_version.tls_certificate.secret_id, aws_secretsmanager_secret_version.tls_key.secret_id, aws_secretsmanager_secret_version.tls_chain.secret_id, aws_secretsmanager_secret_version.agent_token.secret_id]
+    resources = [aws_secretsmanager_secret_version.agent_token.secret_id]
     sid       = "AllowSecretsManagerSecretAccess"
   }
 }
@@ -157,50 +160,6 @@ resource "aws_iam_role" "instance_role" {
 resource "aws_iam_instance_profile" "tfe" {
   name_prefix = "${local.friendly_name_prefix}-tfe"
   role        = aws_iam_role.instance_role.name
-}
-
-resource "aws_secretsmanager_secret" "tfe_license" {
-  description             = "The TFE license"
-  name                    = "${local.friendly_name_prefix}-tfe_license"
-  recovery_window_in_days = 0
-}
-
-resource "aws_secretsmanager_secret_version" "tfe_license" {
-  secret_binary = filebase64(var.tfe_license_path)
-  secret_id     = aws_secretsmanager_secret.tfe_license.id
-}
-
-resource "aws_secretsmanager_secret" "tls_certificate" {
-  description             = "TLS certificate"
-  name                    = "${local.friendly_name_prefix}-tfe_certificate"
-  recovery_window_in_days = 0
-}
-
-resource "aws_secretsmanager_secret_version" "tls_certificate" {
-  secret_binary = filebase64(var.ssl_fullchain_cert_path)
-  secret_id     = aws_secretsmanager_secret.tls_certificate.id
-}
-
-resource "aws_secretsmanager_secret" "tls_key" {
-  description             = "TLS key"
-  name                    = "${local.friendly_name_prefix}-tfe_key"
-  recovery_window_in_days = 0
-}
-
-resource "aws_secretsmanager_secret_version" "tls_key" {
-  secret_binary = filebase64(var.ssl_key_path)
-  secret_id     = aws_secretsmanager_secret.tls_key.id
-}
-
-resource "aws_secretsmanager_secret_version" "tls_chain" {
-  secret_binary = filebase64(var.ssl_chain_path)
-  secret_id     = aws_secretsmanager_secret.tls_chain.id
-}
-
-resource "aws_secretsmanager_secret" "tls_chain" {
-  description             = "TLS chain"
-  name                    = "${local.friendly_name_prefix}-tfe_chain"
-  recovery_window_in_days = 0
 }
 
 resource "aws_secretsmanager_secret" "agent_token" {
@@ -539,10 +498,10 @@ resource "aws_s3_bucket_public_access_block" "tfe_data" {
   ignore_public_acls      = true
 }
 
-resource "aws_s3_bucket_policy" "tfe_data" {
+/* resource "aws_s3_bucket_policy" "tfe_data" {
   bucket = aws_s3_bucket_public_access_block.tfe_data.bucket
   policy = data.aws_iam_policy_document.tfe_data.json
-}
+} */
 
 resource "aws_security_group" "redis_sg" {
   name   = "${local.friendly_name_prefix}-redis-sg"
@@ -647,38 +606,65 @@ resource "aws_autoscaling_group" "tfc_agent" {
 
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "18.31.2"
+  version = "19.16.0"
 
-  cluster_name    = "${local.friendly_name_prefix}-eks"
-  cluster_version = "1.27"
+  cluster_name                                 = "${local.friendly_name_prefix}-eks"
+  cluster_version                              = "1.27"
+  enable_irsa                                  = true
+  cluster_endpoint_private_access              = true
+  cluster_endpoint_public_access               = true
+  node_security_group_enable_recommended_rules = false # overrides with custom ingress rules
 
-  cluster_endpoint_private_access = true
-  cluster_endpoint_public_access  = true
-  create_node_security_group      = true
-  create_cluster_security_group   = true
+  create_iam_role          = true
+  iam_role_name            = "${local.friendly_name_prefix}-eks-managed-node-group"
+  iam_role_use_name_prefix = false
+
+  iam_role_additional_policies = {
+    AmazonEC2ContainerRegistryReadOnly = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+    additional                         = aws_iam_policy.eks_s3.arn
+    # additional policy should match with role used for service account annotation in helm config
+  }
 
   cluster_addons = {
     coredns = {
+      #preserve                    = false
       resolve_conflicts_on_create = "PRESERVE"
       resolve_conflicts_on_update = "OVERWRITE"
+      resolve_conflicts           = "OVERWRITE"
     }
     kube-proxy = {
+      #preserve                    = false
       resolve_conflicts_on_create = "PRESERVE"
       resolve_conflicts_on_update = "OVERWRITE"
+      resolve_conflicts           = "OVERWRITE"
     }
     vpc-cni = {
+      #preserve                    = false
       resolve_conflicts_on_create = "PRESERVE"
       resolve_conflicts_on_update = "OVERWRITE"
+      resolve_conflicts           = "OVERWRITE"
     }
   }
 
-  vpc_id     = aws_vpc.vpc.id
-  subnet_ids = [aws_subnet.subnet_private1.id, aws_subnet.subnet_private2.id]
+  node_security_group_additional_rules = {
+    ingress_self_all = {
+      description = "Node to node all ports/protocols"
+      protocol    = "-1"
+      from_port   = 0
+      to_port     = 0
+      type        = "ingress"
+      self        = true
+    }
+  }
+
+  vpc_id                   = aws_vpc.vpc.id
+  subnet_ids               = [aws_subnet.subnet_private1.id, aws_subnet.subnet_private2.id]
+  control_plane_subnet_ids = [aws_subnet.subnet_private1.id, aws_subnet.subnet_private2.id]
 
   eks_managed_node_group_defaults = {
-    ami_type                              = "AL2_x86_64"
-    attach_cluster_primary_security_group = false
-    create_security_group                 = true
+    #ami_type                              = "AL2_x86_64"
+    ami_type                              = "BOTTLEROCKET_x86_64"
+    attach_cluster_primary_security_group = true # was false
   }
 
   eks_managed_node_groups = {
@@ -695,12 +681,21 @@ module "eks" {
       vpc_security_group_ids = [
         aws_security_group.internal_sg.id
       ]
+      metadata_options = {
+        http_endpoint               = "enabled"
+        http_tokens                 = "optional"
+        http_put_response_hop_limit = 2
+        # Do not disable instance metadata `http_put_response_hop_limit = 1` as this will prevent components like the node 
+        # termination handler and other things that rely on instance metadata from working properly.
+        # https://aws.github.io/aws-eks-best-practices/security/docs/iam/#restrict-access-to-the-instance-profile-assigned-to-the-worker-node
+        instance_metadata_tags = "enabled"
+      }
     }
   }
 }
 
 data "aws_eks_cluster" "k8s" {
-  name = module.eks.cluster_id
+  name = module.eks.cluster_name
 }
 
 provider "kubernetes" {
@@ -808,7 +803,94 @@ provider "helm" {
   ]
 } */
 
-data "aws_iam_policy_document" "tfe_data" {
+/* resource "aws_iam_role" "eks_s3_service" {
+  name_prefix        = "${local.friendly_name_prefix}-eks_s3_service"
+  assume_role_policy = data.aws_iam_policy_document.eks_s3.json
+} */
+
+# Service account name for TFE in helm-chart is `terraform-enterprise`
+# https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html
+# https://docs.aws.amazon.com/eks/latest/userguide/associate-service-account-role.html
+
+# How to configure service accounts for pods
+# https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/
+
+# Projected volume storage use instead of service account ?
+# https://kubernetes.io/docs/tasks/configure-pod-container/configure-projected-volume-storage/
+
+data "aws_iam_policy_document" "eks_s3" {
+  statement {
+    actions = [
+      "s3:ListBucket",
+      "s3:ListBucketVersions"
+    ]
+    effect    = "Allow"
+    resources = [aws_s3_bucket.tfe_data.arn]
+  }
+
+  statement {
+    actions = [
+      "s3:DeleteObject",
+      "s3:GetObject",
+      "s3:PutObject",
+    ]
+    effect    = "Allow"
+    resources = ["${aws_s3_bucket.tfe_data.arn}/*"]
+  }
+}
+
+resource "aws_iam_policy" "eks_s3" {
+  name   = "${local.friendly_name_prefix}-eks_s3"
+  policy = data.aws_iam_policy_document.eks_s3.json
+  # Policy for AWS EKS service account used for pods
+}
+
+data "aws_iam_policy_document" "tfe_assume_role_policy" {
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    effect  = "Allow"
+
+    condition {
+      test     = "StringEquals"
+      variable = "${module.eks.oidc_provider}:sub"
+      values   = ["system:serviceaccount:${local.tfe_k8s_namespace}:${local.tfe_k8s_namespace}"]
+    }
+
+    principals {
+      identifiers = [module.eks.oidc_provider_arn]
+      type        = "Federated"
+    }
+  }
+
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    effect  = "Allow"
+
+    condition {
+      test     = "StringEquals"
+      variable = "${module.eks.oidc_provider}:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    principals {
+      identifiers = [module.eks.oidc_provider_arn]
+      type        = "Federated"
+    }
+  }
+}
+
+resource "aws_iam_role" "tfe_pods_assume_role" {
+  assume_role_policy = data.aws_iam_policy_document.tfe_assume_role_policy.json
+  name               = "${local.friendly_name_prefix}-tfe-pods-assume-role"
+}
+
+resource "aws_iam_policy_attachment" "tfe_pods_assume_role" {
+  name       = "${local.friendly_name_prefix}-tfe-pods-assume-role"
+  roles      = [aws_iam_role.tfe_pods_assume_role.name]
+  policy_arn = aws_iam_policy.eks_s3.arn
+}
+
+/* data "aws_iam_policy_document" "tfe_data" {
   statement {
     actions = [
       "s3:GetBucketLocation",
@@ -837,7 +919,7 @@ data "aws_iam_policy_document" "tfe_data" {
     resources = ["${aws_s3_bucket.tfe_data.arn}/*"]
     sid       = "AllowS3ManagementData"
   }
-}
+} */
 
 /* resource "aws_lb" "tfe_lb" {
   name               = "${local.friendly_name_prefix}-tfe-app-lb"
@@ -926,6 +1008,15 @@ resource "kubernetes_namespace" "terraform-enterprise" {
   ]
 }
 
+# resource "kubernetes_namespace" "k8tz" {
+#   metadata {
+#     name = "k8tz"
+#   }
+#   depends_on = [
+#     module.eks
+#   ]
+# }
+
 data "template_file" "docker_config" {
   template = file("templates/docker_registry.json.tpl")
   vars = {
@@ -946,15 +1037,8 @@ resource "kubernetes_secret" "docker_registry" {
   }
   type = "kubernetes.io/dockerconfigjson"
 }
-/* 
-resource "kubernetes_service_account" "assumerole" {
-  metadata {
-    name      = "terraform-enterprise"
-    namespace = kubernetes_namespace.terraform-enterprise.id
-  }
-} */
 
-resource "helm_release" "ingress-nginx" {
+/* resource "helm_release" "ingress-nginx" {
   name             = "ingress-nginx"
   repository       = "https://kubernetes.github.io/ingress-nginx"
   chart            = "ingress-nginx"
@@ -964,20 +1048,146 @@ resource "helm_release" "ingress-nginx" {
   force_update     = true
   create_namespace = true
   version          = "4.7.1"
-}
+  depends_on       = [module.eks]
+} */
+
+/* resource "helm_release" "k8tz" {
+  name             = "k8tz"
+  repository       = "../k8tz/charts"
+  chart            = "k8tz"
+  namespace        = "k8tz"
+  cleanup_on_fail  = true
+  replace          = true
+  force_update     = true
+  create_namespace = false
+  depends_on       = [module.eks, kubernetes_namespace.k8tz]
+  version          = "0.13.1"
+
+  set {
+    name  = "timezone"
+    value = "Europe/Amsterdam"
+    type  = "string"
+  }
+} */
 
 resource "helm_release" "terraform-enterprise" {
   name            = "terraform-enterprise"
   chart           = "../terraform-enterprise-helm"
-  values          = [local.values-yaml]
+  values          = [local.overrides-yaml]
   namespace       = kubernetes_namespace.terraform-enterprise.id
   cleanup_on_fail = true
   replace         = true
   force_update    = true
   version         = "0.1.2"
-  depends_on      = [helm_release.ingress-nginx]
+  wait            = false
+  depends_on      = [module.eks, kubernetes_namespace.terraform-enterprise]
 }
 
-/* data "aws_eks_cluster" "eks" {
-  name = "${local.friendly_name_prefix}-eks"
-} */
+# Configure service accounts for pods
+# https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/
+#
+# AWS S3 config of TFE in source code https://github.com/hashicorp/terraform-enterprise/blob/main/config/config.go
+#
+# container for testing service account
+#
+# Create resource:
+# resource "kubernetes_service_account" "terraform-enterprise-s3" {
+#   metadata {
+#     name      = "terraform-enterprise"
+#     namespace = local.tfe_k8s_namespace
+#     annotations = {
+#       "eks.amazonaws.com/role-arn" : aws_iam_role.tfe_pods_assume_role.arn
+#     }
+#   }
+#   depends_on = [kubernetes_namespace.terraform-enterprise]
+# }
+
+# resource "kubernetes_pod" "awsclitest" {
+#   metadata {
+#     name      = "awsclitest"
+#     namespace = local.tfe_k8s_namespace
+#   }
+#   spec {
+#     service_account_name = "terraform-enterprise"
+#     container {
+#       name  = "awsclitest"
+#       image = "amazon/aws-cli:latest"
+#       # Sleep so that the container stays alive
+#       # #continuous-sleeping
+#       command = ["/bin/bash", "-c", "--"]
+#       args    = ["while true; do sleep 5; done;"]
+#     }
+#   }
+#   depends_on = [kubernetes_namespace.terraform-enterprise]
+# }
+
+# Exec into the running pod
+# $ kubectl -n terraform-enterprise exec -ti awsclitest -- /bin/bash
+#
+# Check the AWS Security Token Service identity
+# $ aws sts get-caller-identity
+# {
+#     "UserId": "AROA46FON4H773JH4MPJD:botocore-session-1637837863",
+#     "Account": "889424044543",
+#     "Arn": "arn:aws:sts::889424044543:assumed-role/iam-role-test/botocore-session-1637837863"
+# }
+#
+# Check the AWS environment variables
+# bash-4.2# aws sts get-caller-identity
+# {
+#     "UserId": "AROATTLF7RR6EA6ET2EB5:botocore-session-1691689294",
+#     "Account": "247711370364",
+#     "Arn": "arn:aws:sts::247711370364:assumed-role/xxxx-cws8t6-tfe-pods-assume-role/botocore-session-1691689294"
+# }
+# bash-4.2# env | grep "AWS_"
+# AWS_ROLE_ARN=arn:aws:iam::247711370364:role/xxxx-cws8t6-tfe-pods-assume-role
+# AWS_WEB_IDENTITY_TOKEN_FILE=/var/run/secrets/eks.amazonaws.com/serviceaccount/token
+# AWS_DEFAULT_REGION=eu-north-1
+# AWS_REGION=eu-north-1
+# AWS_STS_REGIONAL_ENDPOINTS=regional
+#
+# IAM role for Service Account is supported from AWS SDK Go 1.23.13
+#
+# View ARN of the IAM role that pod is using:
+# $ kubectl describe pod my-app-6f4dfff6cb-76cv9 | grep AWS_ROLE_ARN:
+#
+# AWS_ROLE_ARN:                 arn:aws:iam::111122223333:role/my-role
+#
+# Confirm that deployment is using service account:
+# $ kubectl describe deployment my-app | grep "Service Account"
+#
+# Service Account:  my-service-account
+#
+# Helm get chart values
+# helm -n terraform-enterprise get values terraform-enterprise
+#
+
+resource "kubernetes_pod" "awsclitest" {
+  metadata {
+    name      = "awsclitest"
+    namespace = local.tfe_k8s_namespace
+  }
+  spec {
+    service_account_name = kubernetes_service_account.terraform-enterprise-s3.metadata[0].name
+    container {
+      name  = "awsclitest"
+      image = "amazon/aws-cli:latest"
+      # Sleep so that the container stays alive
+      # #continuous-sleeping
+      command = ["/bin/bash", "-c", "--"]
+      args    = ["while true; do sleep 5; done;"]
+    }
+  }
+  depends_on = [kubernetes_service_account.terraform-enterprise-s3, kubernetes_namespace.terraform-enterprise]
+}
+
+resource "kubernetes_service_account" "terraform-enterprise-s3" {
+  metadata {
+    name      = "terraform-enterprise-s3"
+    namespace = local.tfe_k8s_namespace
+    annotations = {
+      "eks.amazonaws.com/role-arn" : aws_iam_role.tfe_pods_assume_role.arn
+    }
+  }
+  depends_on = [kubernetes_namespace.terraform-enterprise, module.eks]
+}
