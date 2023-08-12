@@ -31,7 +31,7 @@ locals {
       tfe_tls_version   = var.tfe_tls_version
       tls_key_data      = filebase64(var.ssl_key_path)
       tls_crt_data      = filebase64(var.ssl_fullchain_cert_path)
-      license_data      = filebase64(var.tfe_license_path)
+      license_data      = file(var.tfe_license_path) # ! License variable is not base64 encoded for k8s setup
       docker_repository = var.docker_repository
       tfe_s3_role_arn   = aws_iam_role.tfe_pods_assume_role.arn
     }
@@ -1162,6 +1162,17 @@ resource "helm_release" "terraform-enterprise" {
 # helm -n terraform-enterprise get values terraform-enterprise
 #
 
+resource "kubernetes_service_account" "terraform-enterprise-s3" {
+  metadata {
+    name      = "terraform-enterprise-s3"
+    namespace = local.tfe_k8s_namespace
+    annotations = {
+      "eks.amazonaws.com/role-arn" : aws_iam_role.tfe_pods_assume_role.arn
+    }
+  }
+  depends_on = [kubernetes_namespace.terraform-enterprise, module.eks]
+}
+
 resource "kubernetes_pod" "awsclitest" {
   metadata {
     name      = "awsclitest"
@@ -1179,15 +1190,4 @@ resource "kubernetes_pod" "awsclitest" {
     }
   }
   depends_on = [kubernetes_service_account.terraform-enterprise-s3, kubernetes_namespace.terraform-enterprise]
-}
-
-resource "kubernetes_service_account" "terraform-enterprise-s3" {
-  metadata {
-    name      = "terraform-enterprise-s3"
-    namespace = local.tfe_k8s_namespace
-    annotations = {
-      "eks.amazonaws.com/role-arn" : aws_iam_role.tfe_pods_assume_role.arn
-    }
-  }
-  depends_on = [kubernetes_namespace.terraform-enterprise, module.eks]
 }
