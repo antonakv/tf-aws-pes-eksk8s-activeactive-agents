@@ -54,12 +54,12 @@ securityContext:
 initContainers: null
 
 ingress:
-  enabled: false
+  enabled: true
   className: nginx
   annotations: 
-#    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
-    kubernetes.io/ingress.class: nginx
-#    kubernetes.io/tls-acme: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
   hosts:
     - host: ${hostname}
       paths:
