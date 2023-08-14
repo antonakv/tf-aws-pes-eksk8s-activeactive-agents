@@ -1,22 +1,6 @@
-output "url" {
-  value       = "https://${local.tfe_hostname}/admin/account/new?token=${random_id.user_token.hex}"
-  description = "Login URL and token"
-}
-output "tfe_hostname" {
-  value       = local.tfe_hostname
-  description = "TFE fqdn"
-}
 output "ssh_key_name" {
   value       = var.key_name
   description = "SSH key name"
-}
-output "aws_active_agents_ips" {
-  value       = join(", ", data.aws_instances.tfc_agent.private_ips)
-  description = "Agent hosts in the autoscaling group"
-}
-output "aws_agent_ec2_ids" {
-  value       = toset(data.aws_instances.tfc_agent.ids)
-  description = "Agent EC2 host ids"
 }
 output "vpc_id" {
   value       = aws_vpc.vpc.id
@@ -25,6 +9,10 @@ output "vpc_id" {
 output "internal_sg_id" {
   value       = aws_security_group.internal_sg.id
   description = "ID of internal security group"
+}
+output "public_sg_id" {
+  value       = aws_security_group.public_sg.id
+  description = "ID of public security group"
 }
 output "friendly_name_prefix" {
   value       = local.friendly_name_prefix
@@ -50,12 +38,7 @@ output "region" {
   description = "AWS region"
   value       = var.region
 }
-output "agent_token" {
-  description = "Agent token"
-  value       = var.agent_token
-  sensitive   = true
-}
-output "kubectl_get_update_credentials" {
-  description = "Run to retrieve the access credentials for the k8s and configure kubectl"
-  value       = "aws eks --region ${var.region} update-kubeconfig --name ${local.friendly_name_prefix}-eks"
+output "aws_s3_bucket_arn" {
+  value       = aws_s3_bucket.tfe_data.arn
+  description = "TFE S3 bucket arn"
 }
