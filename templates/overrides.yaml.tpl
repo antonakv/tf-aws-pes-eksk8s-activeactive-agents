@@ -34,8 +34,7 @@ tfe:
   privateHttpsPort: 8443 
 
 pod:
-  annotations:
-    k8tz.io/timezone: "Europe/Amsterdam"
+  annotations: {}
 
 nodeSelector: {}
 
@@ -43,11 +42,14 @@ tolerations: []
 
 affinity: {}
 
+# In the docker image TFE user id is 1000 and name is terraform-enterprise
+# TFE user group is 0
+# Manual: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/
 securityContext:
-  # runAsNonRoot: false
-  # runAsUser: 1000
-  # runAsGroup: 3000
-  fsGroup: 2000
+  runAsNonRoot: false
+  runAsUser: 1000
+  runAsGroup: 0
+  fsGroup: 0
 
 initContainers: null
 
@@ -55,9 +57,9 @@ ingress:
   enabled: false
   className: nginx
   annotations: 
-    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+#    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
     kubernetes.io/ingress.class: nginx
-    kubernetes.io/tls-acme: "true"
+#    kubernetes.io/tls-acme: "true"
   hosts:
     - host: ${hostname}
       paths:
@@ -82,7 +84,7 @@ rbac:
 
 serviceAccount:
   create: true
-  annotations: 
+  annotations:
     eks.amazonaws.com/role-arn: "${tfe_s3_role_arn}"
   name: ""
   # The name of the service account to use.
@@ -115,3 +117,5 @@ env:
     TFE_IACT_TOKEN: ${user_token}
     TFE_DATABASE_PASSWORD: ${pg_password}
     TFE_REDIS_PASSWORD: ${redis_pass}
+
+# Variables configuration reference https://developer.hashicorp.com/terraform/enterprise/flexible-deployments-beta/install/configuration
