@@ -1,5 +1,5 @@
 ---
-replicaCount: 1
+replicaCount: 3
 
 imagePullSecrets:
 - name: docker-registry
@@ -54,7 +54,7 @@ securityContext:
 initContainers: null
 
 ingress:
-  enabled: true
+  enabled: false
   className: nginx
   annotations: 
     nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"

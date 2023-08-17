@@ -58,7 +58,3 @@ variable "tfe_tls_version" {
   type        = string
   description = "TFE tls version"
 }
-variable "tfc_agent_docker_image_tag" {
-  type        = string
-  description = "hashicorp/tfc-agent image tag"
-}

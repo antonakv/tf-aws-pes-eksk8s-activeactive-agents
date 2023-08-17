@@ -1,5 +1,25 @@
+data "terraform_remote_state" "main" {
+  backend = "local"
+
+  config = {
+    path = "../terraform.tfstate"
+  }
+}
+
+data "terraform_remote_state" "kubernetes" {
+  backend = "local"
+
+  config = {
+    path = "../kubernetes/terraform.tfstate"
+  }
+}
+
+data "aws_eks_cluster_auth" "cluster_auth" {
+  name = data.terraform_remote_state.kubernetes.outputs.aws_eks_cluster_k8s_name
+}
+
 locals {
-  tfe_hostname         = "${random_string.friendly_name.id}${var.tfe_hostname}"
+  tfe_hostname         = "${data.terraform_remote_state.main.outputs.friendly_name_id}${var.tfe_hostname}"
   service_account_name = "terraform-enterprise"
   tfe_k8s_namespace    = "terraform-enterprise"
   overrides-yaml = templatefile(
@@ -8,40 +28,35 @@ locals {
       hostname          = local.tfe_hostname
       docker_image_tag  = var.docker_image_tag
       enc_password      = random_id.enc_password.hex
-      pg_dbname         = var.postgres_db_name
-      pg_netloc         = aws_db_instance.tfe.endpoint
-      pg_password       = random_string.pgsql_password.result
-      pg_user           = var.postgres_username
-      region            = var.region
-      s3_bucket         = aws_s3_bucket.tfe_data.id
+      pg_dbname         = data.terraform_remote_state.main.outputs.postgres_db_name
+      pg_netloc         = data.terraform_remote_state.main.outputs.postgres_endpoint
+      pg_password       = data.terraform_remote_state.main.outputs.postgres_password
+      pg_user           = data.terraform_remote_state.main.outputs.postgres_username
+      region            = data.terraform_remote_state.main.outputs.region
+      s3_bucket         = data.terraform_remote_state.main.outputs.aws_s3_bucket_name
       install_id        = random_id.install_id.hex
       user_token        = random_id.user_token.hex
-      redis_pass        = random_id.redis_password.hex
-      redis_host        = aws_elasticache_replication_group.redis.primary_endpoint_address
+      redis_pass        = data.terraform_remote_state.main.outputs.redis_password
+      redis_host        = data.terraform_remote_state.main.outputs.redis_host
       tfe_tls_version   = var.tfe_tls_version
       tls_key_data      = filebase64(var.ssl_key_path)
       tls_crt_data      = filebase64(var.ssl_fullchain_cert_path)
       license_data      = file(var.tfe_license_path) # ! License variable is not base64 encoded for k8s setup
       docker_repository = var.docker_repository
-      tfe_s3_role_arn   = aws_iam_role.tfe_pods_assume_role.arn
+      tfe_s3_role_arn   = data.terraform_remote_state.kubernetes.outputs.tfe_pods_assume_role
     }
   )
 }
 
+provider "cloudflare" {
+  api_token = var.cloudflare_api_token
+}
+
 provider "helm" {
   kubernetes {
-    host                   = data.aws_eks_cluster.k8s.endpoint
-    cluster_ca_certificate = base64decode(data.aws_eks_cluster.k8s.certificate_authority.0.data)
-    exec {
-      api_version = "client.authentication.k8s.io/v1beta1"
-      command     = "aws"
-      args = [
-        "eks",
-        "get-token",
-        "--cluster-name",
-        data.aws_eks_cluster.k8s.name
-      ]
-    }
+    host                   = data.terraform_remote_state.kubernetes.outputs.aws_eks_k8s_endpoint
+    cluster_ca_certificate = base64decode(data.terraform_remote_state.kubernetes.outputs.aws_eks_k8s_certificate_authority)
+    token                  = data.aws_eks_cluster_auth.cluster_auth.token
   }
   experiments {
     # show rendered helm values in the terraform plan
@@ -50,45 +65,25 @@ provider "helm" {
 }
 
 provider "kubernetes" {
-  host                   = data.aws_eks_cluster.k8s.endpoint
-  cluster_ca_certificate = base64decode(data.aws_eks_cluster.k8s.certificate_authority.0.data)
-  exec {
-    api_version = "client.authentication.k8s.io/v1beta1"
-    command     = "aws"
-    args = [
-      "eks",
-      "get-token",
-      "--cluster-name",
-      data.aws_eks_cluster.k8s.name
-    ]
-  }
-}
-
-resource "helm_release" "ingress-nginx" {
-  name             = "ingress-nginx"
-  repository       = "https://kubernetes.github.io/ingress-nginx"
-  chart            = "ingress-nginx"
-  namespace        = "ingress-nginx"
-  cleanup_on_fail  = true
-  replace          = false
-  force_update     = true
-  create_namespace = false
-  version          = "4.7.1"
-  wait             = false
-  depends_on       = [module.eks, kubernetes_namespace.ingress-nginx]
+  host                   = data.terraform_remote_state.kubernetes.outputs.aws_eks_k8s_endpoint
+  cluster_ca_certificate = base64decode(data.terraform_remote_state.kubernetes.outputs.aws_eks_k8s_certificate_authority)
+  token                  = data.aws_eks_cluster_auth.cluster_auth.token
 }
 
 resource "helm_release" "terraform-enterprise" {
-  name            = "terraform-enterprise"
-  chart           = "../terraform-enterprise-helm"
-  values          = [local.overrides-yaml]
-  namespace       = kubernetes_namespace.terraform-enterprise.id
-  cleanup_on_fail = true
-  replace         = false
-  force_update    = false
-  version         = "0.1.2"
-  wait            = false
-  depends_on      = [module.eks, kubernetes_namespace.terraform-enterprise, helm_release.ingress-nginx]
+  name             = "terraform-enterprise"
+  chart            = "../terraform-enterprise-helm"
+  values           = [local.overrides-yaml]
+  namespace        = kubernetes_namespace.terraform-enterprise.id
+  cleanup_on_fail  = true
+  replace          = true
+  force_update     = false
+  create_namespace = false
+  version          = "0.1.2"
+  wait             = false
+  wait_for_jobs    = true
+  timeout          = 800
+  depends_on       = [kubernetes_namespace.terraform-enterprise, kubernetes_namespace.terraform-enterprise-agents]
 }
 
 data "local_sensitive_file" "sslcert" {
@@ -105,17 +100,17 @@ data "local_sensitive_file" "sslchain" {
 
 data "aws_instances" "tfc_agent" {
   instance_tags = {
-    Name = "${local.friendly_name_prefix}-asg-tfc_agent"
+    Name = "${data.terraform_remote_state.main.outputs.friendly_name_id}-asg-tfc_agent"
   }
   filter {
     name   = "instance.group-id"
-    values = [aws_security_group.internal_sg.id]
+    values = [data.terraform_remote_state.main.outputs.internal_sg_id]
   }
   instance_state_names = ["running"]
 }
 
 provider "aws" {
-  region = var.region
+  region = data.terraform_remote_state.main.outputs.region
 }
 
 resource "random_id" "enc_password" {
@@ -141,19 +136,31 @@ resource "kubernetes_namespace" "terraform-enterprise" {
     labels = {
       app = "terraform-enterprise"
     }
+    annotations = {
+      "meta.helm.sh/release-name" : "terraform-enterprise"
+      "meta.helm.sh/release-namespace" : "terraform-enterprise"
+    }
   }
-  depends_on = [
-    module.eks
-  ]
+  lifecycle {
+    ignore_changes = [metadata.0.annotations, metadata.0.labels]
+  }
 }
 
-resource "kubernetes_namespace" "ingress-nginx" {
+resource "kubernetes_namespace" "terraform-enterprise-agents" {
   metadata {
-    name = "ingress-nginx"
+    name = "terraform-enterprise-agents"
+    labels = {
+      "app.kubernetes.io/managed-by" : "Helm"
+    }
+    annotations = {
+      "app.kubernetes.io/managed-by" : "Helm"
+      "meta.helm.sh/release-name" : "terraform-enterprise"
+      "meta.helm.sh/release-namespace" : "terraform-enterprise"
+    }
   }
-  depends_on = [
-    module.eks
-  ]
+  lifecycle {
+    ignore_changes = [metadata.0.annotations, metadata.0.labels]
+  }
 }
 
 data "template_file" "docker_config" {
@@ -177,11 +184,17 @@ resource "kubernetes_secret" "docker_registry" {
   type = "kubernetes.io/dockerconfigjson"
 }
 
-provider "cloudflare" {
-  api_token = var.cloudflare_api_token
+data "kubernetes_service" "tfe" {
+  metadata {
+    name      = "terraform-enterprise"
+    namespace = "terraform-enterprise"
+  }
 }
 
-data "aws_eks_cluster" "k8s" {
-  name = module.eks.cluster_name
+resource "cloudflare_record" "tfe" {
+  zone_id = var.cloudflare_zone_id
+  name    = local.tfe_hostname
+  type    = "CNAME"
+  ttl     = 1
+  value   = data.kubernetes_service.tfe.status != null ? data.kubernetes_service.tfe.status.0.load_balancer.0.ingress.0.hostname : "0.0.0.0"
 }
-
