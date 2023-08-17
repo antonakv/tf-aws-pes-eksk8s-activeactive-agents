@@ -10,6 +10,28 @@ provider "aws" {
   region = data.terraform_remote_state.main.outputs.region
 }
 
+data "aws_eks_cluster_auth" "cluster_auth" {
+  name = module.eks.cluster_name
+}
+
+provider "kubernetes" {
+  host                   = module.eks.cluster_endpoint
+  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+  token                  = data.aws_eks_cluster_auth.cluster_auth.token
+}
+
+provider "helm" {
+  kubernetes {
+    host                   = module.eks.cluster_endpoint
+    cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+    token                  = data.aws_eks_cluster_auth.cluster_auth.token
+  }
+  experiments {
+    # show rendered helm values in the terraform plan
+    manifest = false
+  }
+}
+
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "19.16.0"
@@ -179,7 +201,26 @@ data "aws_iam_policy_document" "eks_s3" {
   }
 }
 
-data "aws_eks_cluster" "k8s" {
-  name       = module.eks.cluster_name
+resource "helm_release" "ingress-nginx" {
+  name             = "ingress-nginx"
+  repository       = "https://kubernetes.github.io/ingress-nginx"
+  chart            = "ingress-nginx"
+  namespace        = "ingress-nginx"
+  cleanup_on_fail  = true
+  replace          = true
+  force_update     = true
+  create_namespace = false
+  version          = "4.7.1"
+  wait             = true
+  wait_for_jobs    = true
+  verify           = false # doesn't work with ingress-nginx chart
+  timeout          = 400
+  depends_on       = [kubernetes_namespace.ingress-nginx]
+}
+
+resource "kubernetes_namespace" "ingress-nginx" {
+  metadata {
+    name = "ingress-nginx"
+  }
   depends_on = [module.eks]
 }

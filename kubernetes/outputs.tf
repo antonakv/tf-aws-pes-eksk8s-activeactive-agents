@@ -4,13 +4,18 @@ output "kubectl_get_update_credentials" {
 }
 output "aws_eks_k8s_endpoint" {
   description = "AWS EKS K8S endpoint"
-  value       = data.aws_eks_cluster.k8s.endpoint
+  value       = module.eks.cluster_endpoint
 }
 output "aws_eks_k8s_certificate_authority" {
   description = "AWS EKS K8S certificate authority"
-  value       = data.aws_eks_cluster.k8s.certificate_authority.0.data
+  value       = module.eks.cluster_certificate_authority_data
+  sensitive   = true
 }
 output "aws_eks_cluster_k8s_name" {
   description = "AWS EKS K8S cluster name"
-  value       = data.aws_eks_cluster.k8s.name
+  value       = module.eks.cluster_name
+}
+output "tfe_pods_assume_role" {
+  description = "TFE pods assume role with S3 access"
+  value       = aws_iam_role.tfe_pods_assume_role.arn
 }
