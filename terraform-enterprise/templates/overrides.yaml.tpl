@@ -75,6 +75,7 @@ ingress:
 service:
   annotations: {}
     # cloud.google.com/neg: '{"ingress": true}'
+    ## service.beta.kubernetes.io/aws-load-balancer-type: nlb # TEST
   type: LoadBalancer
   port: 443
   nodePort: 32443 # if service.type is NodePort value will be set

@@ -1027,7 +1027,7 @@ cd kubernetes
 - Create file terraform.tfvars with following contents
 
 ```
-instance_type               = "t3.2xlarge"
+instance_type               = "t3.xlarge"
 tfe_k8s_namespace_name      = "terraform-enterprise"
 tfe_k8s_serviceaccount_name = "terraform-enterprise"
 k8s_min_nodes               = 3
