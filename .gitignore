@@ -19,7 +19,7 @@ vendor/
 .terraform
 .terraform*
 *.tfstate*
-
+*.tfvars
 Gemfile.lock
 .ruby-version
 .DS_Store
@@ -29,3 +29,4 @@ cert/
 tfe/
 
 upload/
+
