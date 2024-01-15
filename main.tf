@@ -178,15 +178,55 @@ resource "aws_security_group" "internal_sg" {
     to_port     = 5432
     protocol    = "tcp"
     self        = true
-    description = "allow postgres port incoming connections"
+    description = "Allow postgres port incoming connections"
   }
+
+  /*   ingress {
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.node.id]
+    description     = "Allow connection to postgres from eks worker nodes"
+  }
+
+  ingress {
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.cluster.id]
+    description     = "Allow connection to postgres from eks cluster nodes"
+  } */
 
   ingress {
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
     self        = true
-    description = "allow https port incoming connection"
+    description = "Allow https port incoming connection"
+  }
+
+  ingress {
+    from_port   = 10250
+    to_port     = 10250
+    protocol    = "tcp"
+    self        = true
+    description = "EKS Cluster API to EKS node kubelets"
+  }
+
+  ingress {
+    from_port   = 53
+    to_port     = 53
+    protocol    = "tcp"
+    self        = true
+    description = "DNS tcp"
+  }
+
+  ingress {
+    from_port   = 53
+    to_port     = 53
+    protocol    = "udp"
+    self        = true
+    description = "DNS udp"
   }
 
   ingress {
@@ -270,6 +310,68 @@ resource "aws_security_group" "public_sg" {
   }
 }
 
+/* resource "aws_security_group" "cluster" {
+  description = "EKS cluster security group"
+  name        = "${local.friendly_name_prefix}-eks-cluster"
+  vpc_id      = aws_vpc.vpc.id
+}
+
+resource "aws_security_group" "node" {
+  description = "EKS node shared security group"
+  name        = "${local.friendly_name_prefix}-eks-node"
+  vpc_id      = aws_vpc.vpc.id
+}
+
+resource "aws_security_group_rule" "node" {
+  description              = "Cluster API to node groups"
+  from_port                = 443
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.node.id
+  source_security_group_id = aws_security_group.cluster.id
+  to_port                  = 443
+  type                     = "ingress"
+}
+
+resource "aws_security_group_rule" "cluster" {
+  description              = "Node groups to cluster API"
+  from_port                = 443
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.cluster.id
+  source_security_group_id = aws_security_group.node.id
+  to_port                  = 443
+  type                     = "ingress"
+}
+
+resource "aws_security_group_rule" "node_kublets" {
+  description              = "Node groups to cluster API"
+  from_port                = 10250
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.node.id
+  source_security_group_id = aws_security_group.cluster.id
+  to_port                  = 10250
+  type                     = "ingress"
+}
+
+resource "aws_security_group_rule" "node_coredns" {
+  description       = "Node groups to cluster API"
+  from_port         = 53
+  protocol          = "tcp"
+  security_group_id = aws_security_group.node.id
+  self              = true
+  to_port           = 53
+  type              = "ingress"
+}
+
+resource "aws_security_group_rule" "node_coredns_udp" {
+  description       = "Node groups to cluster API udp"
+  from_port         = 53
+  protocol          = "udp"
+  security_group_id = aws_security_group.node.id
+  self              = true
+  to_port           = 53
+  type              = "ingress"
+} */
+
 resource "aws_vpc_endpoint" "s3" {
   vpc_id       = aws_vpc.vpc.id
   service_name = "com.amazonaws.${var.region}.s3"
@@ -316,11 +418,26 @@ resource "aws_security_group" "redis_sg" {
     security_groups = [aws_security_group.internal_sg.id]
   }
 
+  /*   ingress {
+    from_port       = 6379
+    to_port         = 6380
+    protocol        = "tcp"
+    security_groups = [aws_security_group.node.id]
+  }
+
+  ingress {
+    from_port       = 6379
+    to_port         = 6380
+    protocol        = "tcp"
+    security_groups = [aws_security_group.cluster.id]
+  } */
+
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
+    description = "Allow outgoing connections for redis"
   }
 
 }

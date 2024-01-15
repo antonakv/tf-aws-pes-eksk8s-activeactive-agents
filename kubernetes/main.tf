@@ -201,7 +201,7 @@ data "aws_iam_policy_document" "eks_s3" {
   }
 }
 
-resource "helm_release" "ingress-nginx" {
+/* resource "helm_release" "ingress-nginx" {
   name             = "ingress-nginx"
   repository       = "https://kubernetes.github.io/ingress-nginx"
   chart            = "ingress-nginx"
@@ -216,11 +216,11 @@ resource "helm_release" "ingress-nginx" {
   verify           = false # doesn't work with ingress-nginx chart
   timeout          = 400
   depends_on       = [kubernetes_namespace.ingress-nginx]
-}
+} */
 
-resource "kubernetes_namespace" "ingress-nginx" {
+/* resource "kubernetes_namespace" "ingress-nginx" {
   metadata {
     name = "ingress-nginx"
   }
   depends_on = [module.eks]
-}
+} */

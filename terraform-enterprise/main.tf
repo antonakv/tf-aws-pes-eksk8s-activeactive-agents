@@ -192,9 +192,38 @@ data "kubernetes_service" "tfe" {
 }
 
 resource "cloudflare_record" "tfe" {
-  zone_id = var.cloudflare_zone_id
-  name    = local.tfe_hostname
-  type    = "CNAME"
-  ttl     = 1
-  value   = data.kubernetes_service.tfe.status != null ? data.kubernetes_service.tfe.status.0.load_balancer.0.ingress.0.hostname : "0.0.0.0"
+  zone_id    = var.cloudflare_zone_id
+  name       = local.tfe_hostname
+  type       = "CNAME"
+  ttl        = 1
+  value      = data.kubernetes_service.tfe.status != null ? data.kubernetes_service.tfe.status.0.load_balancer.0.ingress.0.hostname : "0.0.0.0"
+  depends_on = [helm_release.terraform-enterprise]
+}
+# ! Default service account in the TFE FDO Helm chart is terraform-enterprise and annotations for TFE should be there 
+
+resource "kubernetes_service_account" "terraform-enterprise-s3" {
+  metadata {
+    name      = "terraform-enterprise-s3"
+    namespace = "terraform-enterprise"
+    annotations = {
+      "eks.amazonaws.com/role-arn" : data.terraform_remote_state.kubernetes.outputs.tfe_pods_assume_role
+    }
+  }
+  depends_on = [kubernetes_namespace.terraform-enterprise]
+}
+
+resource "kubernetes_pod" "busybox" {
+  metadata {
+    name      = "busybox"
+    namespace = "terraform-enterprise"
+  }
+  spec {
+    service_account_name = "terraform-enterprise-s3"
+    container {
+      name    = "busybox"
+      image   = "busybox:1.36"
+      command = ["sleep", "3600"]
+    }
+  }
+  depends_on = [kubernetes_namespace.terraform-enterprise]
 }
